@@ -7,7 +7,7 @@ R code accompanying a study of REM sleep, overnight distress alleviation, and su
 ```text
 00_helpers.R   Shared functions
 00_tables.R    Descriptive tables
-01_analysis.R  Statistical analyses and figures
+01_analysis.R  Statistical analyses and figure
 ```
 
 ## Requirements
