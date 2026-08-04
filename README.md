@@ -1,6 +1,6 @@
 # REM Sleep–Distress Coupling and Anxiety Outcomes
 
-R code accompanying a study of REM sleep, overnight distress alleviation, and subsequent anxiety outcomes.
+R code accompanying a study of overnight distress alleviation and subsequent anxiety outcomes.
 
 ## Repository structure
 
