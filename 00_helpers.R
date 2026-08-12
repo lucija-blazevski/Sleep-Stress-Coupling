@@ -7,13 +7,13 @@
 # -----------------------------------------------------------------------------
 # Functions sourced by the analysis script. Sourcing this file checks
 # that the required packages are installed, attaches them, and then defines
-# helpers grouped as:
+# helpers:
 #
 #   1. Subject IDs and missing-data reduction
 #   2. Within-subject centering and standardization
 #   3. Descriptive-table formatting
 #   4. Model-term extraction and effect labels
-#   5. Table 1 (baseline characteristics) builders
+#   5. Descriptive-table builders
 #   6. Model-fitting wrappers for the results tables
 #   7. Shared ggplot2 theme and annotation
 #
@@ -24,15 +24,14 @@ required_packages <- c(
   "dplyr",
   "stringr",
   "tibble",
+  "readr",
+  "tidyr",
   "ggplot2",
   "ggtext",
-  "lme4",      
-  "lmerTest",
-  "tidyr",
-  "patchwork",
-  "tidyr",
   "ggeffects",
-  "readr"
+  "patchwork",
+  "lme4",
+  "lmerTest"
 )
 
 missing_packages <- required_packages[
@@ -83,15 +82,15 @@ standardize_nsr_id <- function(x) {
 #' First non-missing value of a vector.
 #'
 #' Used to collapse a subject-level constant (e.g. condition, baseline score)
-#' that is repeated across a subject's nightly rows but may contain NAs.
+#' that is repeated across a subject's nightly rows.
 #'
 #' @param x A vector.
-#' @return The first non-missing element, or a typed NA if all are missing.
+#' @return The first non-missing element, or an NA if all are missing.
 first_nonmissing <- function(x) {
   observed <- which(!is.na(x))
   
   if (length(observed) == 0L) {
-    return(x[NA_integer_][1])
+    return(x[NA][1])
   }
   
   x[observed[1]]
@@ -104,7 +103,7 @@ first_nonmissing <- function(x) {
 #' @return The mean of the non-missing values, or NA_real_ if none remain.
 mean_or_na <- function(x) {
   if (all(is.na(x))) {
-    NA_real_
+    NA
   } else {
     mean(x, na.rm = TRUE)
   }
@@ -124,7 +123,7 @@ mean_or_na <- function(x) {
 #' @return Mean-centered vector, or all-NA if the subject has no valid values.
 within_center <- function(x) {
   if (all(is.na(x))) {
-    return(rep(NA_real_, length(x)))
+    return(rep(NA, length(x)))
   }
   
   x - mean(x, na.rm = TRUE)
@@ -135,15 +134,15 @@ within_center <- function(x) {
 #'
 #' Centers and scales to a subject's own mean and SD. Returns all-NA when the
 #' subject has fewer than two valid observations or no within-subject variance,
-#' which keeps degenerate subjects out of the standardized models.
+#' used only for the standardized, supplement models.
 #'
 #' @param x Numeric vector for one subject.
 #' @return Standardized vector, or all-NA if standardization is undefined.
 within_z <- function(x) {
   valid <- !is.na(x)
   
-  if (sum(valid) < 2L || isTRUE(sd(x[valid]) == 0)) {
-    return(rep(NA_real_, length(x)))
+  if (sum(valid) < 2 || isTRUE(sd(x[valid]) == 0)) {
+    return(rep(NA, length(x)))
   }
   
   as.numeric(scale(x))
@@ -194,23 +193,31 @@ format_n_percent <- function(x, positive_value = 1) {
 #' Format a P-value for reporting.
 #'
 #' Uses "<.001" below that threshold, three decimals below .01, otherwise two,
-#' with the leading zero stripped per style conventions.
+#' with the leading zero stripped per style conventions. Returns a blank string
+#' when the P-value is unavailable, which is convenient for manuscript tables.
 #'
 #' @param p Numeric P-value.
-#' @return A character string, or NA_character_ if `p` is NA.
+#' @return A formatted character string, or "" if `p` is NA.
 format_p <- function(p) {
-  case_when(
-    is.na(p) ~ NA_character_,
-    p < .001 ~ "<.001",
-    p < .01  ~ sub("^0", "", sprintf("%.3f", p)),
-    TRUE     ~ sub("^0", "", sprintf("%.2f", p))
-  )
+  if (is.na(p)) {
+    return("")
+  }
+  
+  if (p < .001) {
+    return("<.001")
+  }
+  
+  if (p < .01) {
+    return(sub("^0", "", sprintf("%.3f", p)))
+  }
+  
+  sub("^0", "", sprintf("%.2f", p))
 }
 
 
 #' Summarize a diagnosis indicator as "n/N (percent)".
 #'
-#' Accepts Yes and No for present vs. absent respectively, ignore
+#' Accepts yes and no for present vs. absent, respectively, and ignores
 #' anything it cannot classify (which is excluded from the denominator).
 #'
 #' @param x Vector of diagnosis indicators.
@@ -247,7 +254,7 @@ format_diagnosis <- function(x) {
 #'
 #' Returns the estimate, SE, df, test statistic, P-value and 95% CI for one
 #' coefficient, choosing an appropriate CI method per model class (Wald for
-#' mixed models, normal approximation for GLMs, profile for `lm`).
+#' mixed models, normal approximation for GLMs, and `confint()` for `lm`).
 #'
 #' @param model A fitted model (`lm`, `glm`, or `merMod`).
 #' @param term Name of the coefficient to extract.
@@ -313,7 +320,7 @@ model_term <- function(model, term) {
 #' Build a nice effect label for a model term.
 #'
 #' Produces an italicised "b = ...; P ..." string with HTML markup for use in
-#' `richtext_annotation()`.
+#' `richtext_annotation()` for plotting.
 #'
 #' @param model A fitted model.
 #' @param term Name of the coefficient to label.
@@ -338,41 +345,215 @@ format_effect_label <- function(model, term, digits = 3) {
 
 
 # =============================================================================
-# 5. TABLE 1 (BASELINE CHARACTERISTICS) BUILDERS
+# 5. DESCRIPTIVE-TABLE BUILDERS
 # =============================================================================
 
-#' Blank section header row for the baseline-characteristics table.
+# -----------------------------------------------------------------------------
+# Overall-sample rows
+# -----------------------------------------------------------------------------
+
+#' Blank section-header row for an overall-sample table.
 #'
 #' @param label Row label to display in the Characteristic column.
-#' @return A one-row tibble with empty value columns.
-section_row <- function(label) {
+#' @return A one-row tibble with an empty Total column.
+section_total_row <- function(label) {
   tibble(
     Characteristic = label,
-    Total = "",
-    `CBT-I` = "",
-    Control = ""
+    Total = ""
   )
 }
 
-#' Summary row for the baseline-characteristics table.
+
+#' Summary row for an overall-sample table.
 #'
-#' Applies `formatter` to the whole sample and to each treatment arm.
-#' Expects `bl_all` and `bl_randomized` (with a `treatment` column) in the
-#' calling environment.
+#' Applies a formatting function to one variable in the participant-level
+#' baseline dataset. Expects `bl_all` in the calling environment.
 #'
 #' @param label Row label.
 #' @param variable Name of the variable to summarize.
-#' @param formatter A formatting function such as `format_mean_sd`.
-#' @return A one-row tibble with Total, CBT-I, and Control columns.
-summary_row <- function(label, variable, formatter) {
+#' @param formatter Formatting function such as `format_mean_sd`,
+#'   `format_n_percent`, or `format_diagnosis`.
+#' @return A one-row tibble with Characteristic and Total columns.
+total_summary_row <- function(label, variable, formatter) {
   tibble(
     Characteristic = label,
-    Total = formatter(bl_all[[variable]]),
-    `CBT-I` = formatter(
-      bl_randomized[[variable]][bl_randomized$treatment == "CBT-I"]
+    Total = formatter(bl_all[[variable]])
+  )
+}
+
+
+# -----------------------------------------------------------------------------
+# Between-treatment tests
+# -----------------------------------------------------------------------------
+
+#' Welch two-sample t-test between treatment groups.
+#'
+#' Uses non-missing observations from participants with a treatment assignment.
+#' Expects `bl_all` with a `treatment` column in the calling environment.
+#'
+#' @param variable Name of a continuous variable.
+#' @return Numeric P-value, or NA_real_ if the comparison cannot be performed.
+welch_p <- function(variable) {
+  
+  dat <- bl_all %>%
+    select(treatment, all_of(variable)) %>%
+    filter(
+      !is.na(treatment),
+      !is.na(.data[[variable]])
+    )
+  
+  if (
+    nrow(dat) == 0L ||
+    n_distinct(dat$treatment) < 2L
+  ) {
+    return(NA_real_)
+  }
+  
+  t.test(
+    dat[[variable]] ~ dat$treatment,
+    var.equal = FALSE
+  )$p.value
+}
+
+
+#' Pearson chi-square test between treatment groups.
+#'
+#' Uses non-missing observations from participants with a treatment assignment.
+#' Optionally restricts the analysis to a specified set of valid category
+#' values. Expects `bl_all` with a `treatment` column in the calling environment.
+#'
+#' @param variable Name of a categorical variable.
+#' @param valid_values Optional vector of category values to retain.
+#' @return Numeric P-value, or NA_real_ if the comparison cannot be performed.
+chisq_p <- function(variable, valid_values = NULL) {
+  
+  dat <- bl_all %>%
+    select(treatment, all_of(variable)) %>%
+    filter(
+      !is.na(treatment),
+      !is.na(.data[[variable]])
+    )
+  
+  if (!is.null(valid_values)) {
+    dat <- dat %>%
+      filter(.data[[variable]] %in% valid_values)
+  }
+  
+  tab <- table(
+    dat[[variable]],
+    dat$treatment
+  )
+  
+  if (
+    nrow(tab) < 2 ||
+    ncol(tab) < 2
+  ) {
+    return(NA_real_)
+  }
+  
+  suppressWarnings(
+    chisq.test(
+      tab,
+      correct = FALSE
+    )$p.value
+  )
+}
+
+
+# -----------------------------------------------------------------------------
+# Treatment-group rows
+# -----------------------------------------------------------------------------
+
+#' Blank section-header row for a treatment-group table.
+#'
+#' @param label Row label to display in the Characteristic column.
+#' @return A one-row tibble with empty treatment and P-value columns.
+section_group_row <- function(label) {
+  tibble(
+    Characteristic = label,
+    `CBT-I` = "",
+    Control = "",
+    `P Value` = ""
+  )
+}
+
+
+#' Continuous-variable row by treatment condition.
+#'
+#' Reports mean (SD) within each treatment group and the P-value from a
+#' Welch two-sample t-test. Expects `bl_all` with a `treatment` column in the
+#' calling environment.
+#'
+#' @param label Row label.
+#' @param variable Name of the continuous variable.
+#' @return A one-row tibble with treatment summaries and P-value.
+continuous_group_row <- function(label, variable) {
+  
+  tibble(
+    Characteristic = label,
+    `CBT-I` = format_mean_sd(
+      bl_all[[variable]][bl_all$treatment == "CBT-I"]
     ),
-    Control = formatter(
-      bl_randomized[[variable]][bl_randomized$treatment == "Control"]
+    Control = format_mean_sd(
+      bl_all[[variable]][bl_all$treatment == "Control"]
+    ),
+    `P Value` = format_p(
+      welch_p(variable)
+    )
+  )
+}
+
+
+#' Binary-variable row by treatment condition.
+#'
+#' Reports number (percentage) within each treatment group and the P-value
+#' from a Pearson chi-square test. Expects `bl_all` with a `treatment` column
+#' in the calling environment.
+#'
+#' @param label Row label.
+#' @param variable Name of the binary variable.
+#' @return A one-row tibble with treatment summaries and P-value.
+binary_group_row <- function(label, variable) {
+  
+  tibble(
+    Characteristic = label,
+    `CBT-I` = format_n_percent(
+      bl_all[[variable]][bl_all$treatment == "CBT-I"]
+    ),
+    Control = format_n_percent(
+      bl_all[[variable]][bl_all$treatment == "Control"]
+    ),
+    `P Value` = format_p(
+      chisq_p(variable)
+    )
+  )
+}
+
+
+#' Diagnosis row by treatment condition.
+#'
+#' Reports diagnosis frequency within each treatment group using
+#' `format_diagnosis()` and the P-value from a Pearson chi-square test.
+#' Expects `bl_all` with a `treatment` column in the calling environment.
+#'
+#' @param label Row label.
+#' @param variable Name of the diagnosis variable.
+#' @return A one-row tibble with treatment summaries and P-value.
+diagnosis_group_row <- function(label, variable) {
+  
+  tibble(
+    Characteristic = label,
+    `CBT-I` = format_diagnosis(
+      bl_all[[variable]][bl_all$treatment == "CBT-I"]
+    ),
+    Control = format_diagnosis(
+      bl_all[[variable]][bl_all$treatment == "Control"]
+    ),
+    `P Value` = format_p(
+      chisq_p(
+        variable,
+        valid_values = c("yes", "no")
+      )
     )
   )
 }
@@ -382,73 +563,155 @@ summary_row <- function(label, variable, formatter) {
 # 6. MODEL-FITTING WRAPPERS FOR THE RESULTS TABLES
 # =============================================================================
 
-#' Fit one within-subject sleep-predictor model (Analysis 1, supplement table).
+#' Check whether a mixed-effects model converged successfully.
 #'
-#' Regresses morning distress on a within-subject standardized sleep variable
-#' plus the fixed covariates, with a random subject intercept. Fitted with
-#' REML = FALSE so that models differing only in the sleep predictor are
-#' comparable on the same (ML) footing.
-#' Expects `d_sleep_standardized` in the calling environment.
+#' @param model A fitted `merMod` object or an error returned by `tryCatch()`.
+#' @return Logical scalar indicating whether the model converged.
+model_converged <- function(model) {
+  
+  if (!inherits(model, "merMod")) {
+    return(FALSE)
+  }
+  
+  opt_code <- model@optinfo$conv$opt
+  conv_messages <- model@optinfo$conv$lme4$messages
+  
+  opt_ok <- is.null(opt_code) ||
+    length(opt_code) == 0L ||
+    all(opt_code == 0)
+  
+  messages_ok <- is.null(conv_messages)
+  
+  opt_ok && messages_ok
+}
+
+
+#' Fit one within-subject sleep-predictor model (Analysis 1 supplement).
+#'
+#' Fits morning distress as a function of a within-subject standardized sleep
+#' predictor and within-subject centered evening distress. The analytic sample
+#' is defined separately for each sleep predictor and requires at least two
+#' usable observations per participant.
+#'
+#' A model with an uncorrelated random intercept and random slope for the sleep
+#' predictor is attempted first. This model is retained only if it converges
+#' and is nonsingular. Otherwise, a random-intercept-only model is fitted.
+#'
+#' Expects `d_analysis1` in the calling environment and uses `within_z()` and
+#' `model_term()` defined above.
 #'
 #' @param label Human-readable label for the sleep variable.
-#' @param predictor Column name of the (standardized) predictor.
-#' @return A one-row tibble: Sleep variable, n, b, SE, lower_95, upper_95, p.
+#' @param predictor Column name of the sleep predictor.
+#' @return A one-row tibble containing the sleep variable, participant and
+#'   night counts, random-effects structure, random-slope fit status,
+#'   coefficient, SE, 95% CI, and P-value.
 fit_sleep_predictor <- function(label, predictor) {
-  fit <- lmer(
-    as.formula(
-      sprintf(
-        "stress_rating_m ~ %s + E_c + age + RMT20_GAD_T0 + ISI_T0 + (1 | subject)",
-        predictor
-      )
+  
+  # ---------------------------------------------------------------------------
+  # Define model-specific analytic sample
+  # ---------------------------------------------------------------------------
+  
+  dat <- d_analysis1 %>%
+    filter(
+      !is.na(.data[[predictor]]),
+      !is.na(stress_rating_m),
+      !is.na(E_c)
+    ) %>%
+    group_by(subject) %>%
+    filter(n() >= 2) %>%
+    mutate(
+      sleep_predictor_z = within_z(.data[[predictor]])
+    ) %>%
+    ungroup() %>%
+    filter(is.finite(sleep_predictor_z))
+  
+  
+  if (nrow(dat) == 0) {
+    stop(
+      "No usable observations remain for sleep predictor '",
+      predictor,
+      "'."
+    )
+  }
+  
+  
+  # ---------------------------------------------------------------------------
+  # Attempt random intercept + uncorrelated random slope
+  # ---------------------------------------------------------------------------
+  
+  random_slope_model <- tryCatch(
+    lmer(
+      stress_rating_m ~
+        sleep_predictor_z + E_c +
+        (1 + sleep_predictor_z || subject),
+      data = dat,
+      REML = TRUE
     ),
-    data = d_sleep_standardized,
-    REML = FALSE
+    error = function(e) e
   )
   
-  result <- model_term(fit, predictor)
+  
+  random_slope_converged <- model_converged(random_slope_model)
+  
+  random_slope_singular <- if (random_slope_converged) {
+    isSingular(random_slope_model, tol = 1e-4)
+  } else {
+    NA
+  }
+  
+  
+  # ---------------------------------------------------------------------------
+  # Retain random slope only if converged AND nonsingular
+  # ---------------------------------------------------------------------------
+  
+  if (
+    random_slope_converged &&
+    !random_slope_singular
+  ) {
+    
+    model <- random_slope_model
+    random_effects <- "Random intercept + slope"
+    random_slope_status <- "Converged, nonsingular"
+    
+  } else {
+    
+    model <- lmer(
+      stress_rating_m ~
+        sleep_predictor_z + E_c +
+        (1 | subject),
+      data = dat,
+      REML = TRUE
+    )
+    
+    random_effects <- "Random intercept only"
+    
+    random_slope_status <- case_when(
+      !random_slope_converged ~
+        "Random-slope model did not converge",
+      isTRUE(random_slope_singular) ~
+        "Random-slope model singular",
+      TRUE ~
+        "Random-slope model not retained"
+    )
+  }
+  
+  
+  # ---------------------------------------------------------------------------
+  # Extract sleep-predictor effect
+  # ---------------------------------------------------------------------------
+  
+  result <- model_term(
+    model,
+    "sleep_predictor_z"
+  )
+  
   
   tibble(
     `Sleep variable` = label,
-    n = nrow(model.frame(fit)),
-    b = result$estimate,
-    SE = result$SE,
-    lower_95 = result$lower_95,
-    upper_95 = result$upper_95,
-    p = result$p
-  )
-}
-
-#' Fit one secondary-outcome model without the condition interaction.
-#'
-#' Regresses a T1 outcome on the standardized coupling slope, adjusting for the
-#' matching T0 baseline, using only complete cases for the terms involved.
-#' Expects `prediction_df` in the calling environment.
-#'
-#' @param outcome Label for the outcome.
-#' @param variables Length-2 vector: c(T1 variable, T0 variable).
-#' @return A one-row tibble: Outcome, n, b, SE, lower_95, upper_95, p.
-fit_secondary_outcome <- function(outcome, variables) {
-  t1_var <- variables[[1]]
-  t0_var <- variables[[2]]
-  
-  d_outcome <- prediction_df %>%
-    filter(
-      if_all(
-        all_of(c(t1_var, t0_var, "rem_slope_sd")),
-        ~ !is.na(.x)
-      )
-    )
-  
-  fit <- lm(
-    as.formula(sprintf("%s ~ rem_slope_sd + %s", t1_var, t0_var)),
-    data = d_outcome
-  )
-  
-  result <- model_term(fit, "rem_slope_sd")
-  
-  tibble(
-    Outcome = outcome,
-    n = nrow(d_outcome),
+    participants = n_distinct(model.frame(model)$subject),
+    nights = nobs(model),
+    `Random-effects structure` = random_effects,
+    `Random-slope status` = random_slope_status,
     b = result$estimate,
     SE = result$SE,
     lower_95 = result$lower_95,

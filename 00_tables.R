@@ -7,35 +7,38 @@
 # -----------------------------------------------------------------------------
 # Builds the descriptive tables reported in the manuscript:
 #
-#   Table 1     Baseline demographic and clinical characteristics, overall and
-#               by treatment arm.
-#   eTable 1    Baseline sleep-architecture characteristics, overall and by arm.
+#   Table 1     Participant characteristics, overall Analysis 1 sample
+#   eTable 1    Baseline characteristics by treatment condition
+#   eTable 2    Baseline sleep characteristics, overall and by treatment arm
 #
 # R version   : 4.4.2
 # =============================================================================
 
-# Attach helpers
+
+# Attach packages and helper functions
 source("00_helpers.R")
 
-# Folder with the merged input CSV.
+
+# Folder with the merged input CSV
 root <- "path/to/the/folder/with/csv"
 
 
 # =============================================================================
 # 1. DATA PREPARATION
 # =============================================================================
-# Standardize IDs, derive a numeric session, and add within-subject
-# night-level predictors: mean-centered (`_c`) versions used in the primary
-# models and, later, within-subject z-scores for the standardized table.
 
-d2 <- read_csv(
+# Standardize IDs, derive a numeric session variable, and add within-subject
+# centered night-level predictors. At this stage, retain nights with complete
+# evening distress, morning distress, and REM duration.
+
+d <- read_csv(
   file.path(root, "name_of_the_df.csv"),
-  show_col_types = FALSE) %>%
+  show_col_types = FALSE
+) %>%
   mutate(
     subject = standardize_nsr_id(subject_id),
     ses_num = as.integer(str_remove(ses, "^N"))
   ) %>%
-  filter(!is.na(ses_num)) %>%
   group_by(subject) %>%
   mutate(
     E_c = within_center(stress_rating_e),
@@ -45,19 +48,49 @@ d2 <- read_csv(
     N3_c = within_center(n3_of_sleep_period_min),
     TST_c = within_center(tst_corrected_min),
     SE_c = within_center(sleep_eff_corrected_perc),
-    WASO_c = within_center(wake_after_sleep_onset_of_sleep_period_min),
-    SOL_c = within_center(sleep_onset_delay_min),
-    ISI_change = ISI_T1 - ISI_T0
+    WASO_c = within_center(
+      wake_after_sleep_onset_of_sleep_period_min),
+    SOL_c = within_center(sleep_onset_delay_min)
   ) %>%
+  ungroup() %>%
+  filter(
+    !is.na(stress_rating_m),
+    !is.na(stress_rating_e),
+    !is.na(r_of_sleep_period_min))
+
+
+# -----------------------------------------------------------------------------
+# Define Analysis 1 sample
+# -----------------------------------------------------------------------------
+
+# Analysis 1 requires at least 2 eligible evening-night-morning observations.
+# This same participant sample is used for all baseline descriptive tables.
+
+d_analysis1 <- d %>%
+  group_by(subject) %>%
+  filter(n() >= 2) %>%
   ungroup()
 
 
-# =============================================================================
-# 2. TABLE 1 — BASELINE CHARACTERISTICS
-# =============================================================================
-# One row per subject (first night with a valid REM value). Diagnoses are
-# normalized to yes/no; `any_clinical_diagnosis` is "yes" if any dimension is
-# "yes", "no" only when at least one dimension is observed, else NA.
+analysis1_sample_check <- d_analysis1 %>%
+  summarise(
+    participants = n_distinct(subject),
+    nights = n()
+  )
+
+print(analysis1_sample_check)
+
+
+# Expected current analytic sample
+stopifnot(
+  n_distinct(d_analysis1$subject) == 223,
+  nrow(d_analysis1) == 662
+)
+
+
+# -----------------------------------------------------------------------------
+# Create participant-level baseline dataset
+# -----------------------------------------------------------------------------
 
 diagnosis_vars <- c(
   "GAD_diagnosis",
@@ -66,8 +99,13 @@ diagnosis_vars <- c(
   "PTSD_diagnosis"
 )
 
-bl_all <- d2 %>%
-  filter(!is.na(r_of_sleep_period_min)) %>%
+
+# One row per participant, exclusively from the Analysis 1 sample.
+# The earliest eligible session is retained for participant-level variables.
+# Diagnosis variables are normalized to lower-case yes/no strings.
+
+bl_all <- d_analysis1 %>%
+  arrange(subject, ses_num) %>%
   distinct(subject, .keep_all = TRUE) %>%
   mutate(
     treatment = factor(
@@ -80,7 +118,10 @@ bl_all <- d2 %>%
       ~ str_to_lower(str_trim(as.character(.x)))
     ),
     n_diagnoses_available = rowSums(
-      across(all_of(diagnosis_vars), ~ .x %in% c("yes", "no"))
+      across(
+        all_of(diagnosis_vars),
+        ~ .x %in% c("yes", "no")
+      )
     ),
     any_clinical_diagnosis = case_when(
       if_any(
@@ -88,66 +129,230 @@ bl_all <- d2 %>%
         ~ replace_na(.x == "yes", FALSE)
       ) ~ "yes",
       n_diagnoses_available > 0 ~ "no",
-      TRUE ~ NA_character_
+      TRUE ~ NA
     )
   )
 
-# Randomized subset (those with a treatment assignment) for the by-arm columns.
-bl_randomized <- bl_all %>%
-  filter(!is.na(treatment))
 
-# `section_row()` inserts a header; `summary_row()` applies a formatter to the
-# whole sample and each arm (both read bl_all / bl_randomized; see helpers.R).
+stopifnot(nrow(bl_all) == 223)
+
+print(table(bl_all$treatment, useNA = "ifany"))
+
+
+# Treatment-group sample sizes used in supplement tables
+n_cbti <- sum(bl_all$treatment == "CBT-I", na.rm = TRUE)
+n_control <- sum(bl_all$treatment == "Control", na.rm = TRUE)
+
+
+# =============================================================================
+# 2. TABLE 1 — PARTICIPANT CHARACTERISTICS, OVERALL SAMPLE ONLY
+# =============================================================================
+
+# The main-manuscript table contains the overall Analysis 1 sample only.
+# Treatment-specific descriptives are reported in eTable 1.
+
 table1 <- bind_rows(
-  section_row("Demographics"),
-  summary_row("Age, mean (SD)", "age", format_mean_sd),
-  summary_row("Female, No. (%)", "female", format_n_percent),
-  section_row("Insomnia severity"),
-  summary_row("ISI total, mean (SD)", "ISI_T0", format_mean_sd),
-  section_row("RMT20 anxiety dimensions, mean (SD)"),
-  summary_row("Generalized anxiety disorder", "RMT20_GAD_T0", format_mean_sd),
-  summary_row("Social anxiety disorder", "RMT20_SAD_T0", format_mean_sd),
-  summary_row("Panic disorder", "RMT20_panic_disorder_T0", format_mean_sd),
-  summary_row("Posttraumatic stress disorder", "RMT20_PTSD_T0", format_mean_sd),
-  section_row("BPD-C severity, mean (SD)"),
-  summary_row("Borderline personality disorder", "BPD_C_T0", format_mean_sd),
-  section_row("MINI-confirmed clinical diagnoses, No. (%)"),
-  summary_row("Generalized anxiety disorder", "GAD_diagnosis", format_diagnosis),
-  summary_row("Social anxiety disorder", "SAD_diagnosis", format_diagnosis),
-  summary_row("Panic disorder", "PD_diagnosis", format_diagnosis),
-  summary_row("Posttraumatic stress disorder", "PTSD_diagnosis", format_diagnosis),
-  summary_row("Any of the above diagnoses", "any_clinical_diagnosis", format_diagnosis)
+  
+  section_total_row("Demographics"),
+  total_summary_row(
+    "Age, mean (SD)",
+    "age",
+    format_mean_sd
+  ),
+  total_summary_row(
+    "Female, No. (%)",
+    "female",
+    format_n_percent
+  ),
+  
+  section_total_row("Insomnia severity"),
+  total_summary_row(
+    "ISI total, mean (SD)",
+    "ISI_T0",
+    format_mean_sd
+  ),
+  
+  section_total_row("RMT20 subscale, mean (SD)"),
+  total_summary_row(
+    "Generalized anxiety disorder",
+    "RMT20_GAD_T0",
+    format_mean_sd
+  ),
+  total_summary_row(
+    "Social anxiety disorder",
+    "RMT20_SAD_T0",
+    format_mean_sd
+  ),
+  total_summary_row(
+    "Panic disorder",
+    "RMT20_panic_disorder_T0",
+    format_mean_sd
+  ),
+  total_summary_row(
+    "Posttraumatic stress disorder",
+    "RMT20_PTSD_T0",
+    format_mean_sd
+  ),
+  
+  section_total_row("BPD-C severity, mean (SD)"),
+  total_summary_row(
+    "Borderline personality disorder",
+    "BPD_C_T0",
+    format_mean_sd
+  ),
+  
+  section_total_row("MINI-confirmed clinical diagnoses, No. (%)"),
+  total_summary_row(
+    "Generalized anxiety disorder",
+    "GAD_diagnosis",
+    format_diagnosis
+  ),
+  total_summary_row(
+    "Social anxiety disorder",
+    "SAD_diagnosis",
+    format_diagnosis
+  ),
+  total_summary_row(
+    "Panic disorder",
+    "PD_diagnosis",
+    format_diagnosis
+  ),
+  total_summary_row(
+    "Posttraumatic stress disorder",
+    "PTSD_diagnosis",
+    format_diagnosis
+  ),
+  total_summary_row(
+    "Any of the above diagnoses",
+    "any_clinical_diagnosis",
+    format_diagnosis
+  )
 )
 
-# Column headers with sample sizes.
+
 names(table1) <- c(
   "Characteristic",
-  sprintf("Total (N = %d)", nrow(bl_all)),
-  sprintf("CBT-I (n = %d)", sum(bl_randomized$treatment == "CBT-I")),
-  sprintf("Control (n = %d)", sum(bl_randomized$treatment == "Control"))
+  sprintf("Total (N = %d)", nrow(bl_all))
 )
+
 
 print(table1, n = Inf, width = Inf)
 
 
 # =============================================================================
-# 3. eTABLE 1 — BASELINE SLEEP CHARACTERISTICS
+# 3. eTABLE 1 — BASELINE CHARACTERISTICS BY TREATMENT CONDITION
 # =============================================================================
-# Subject-level mean of each sleep variable, summarized as mean (SD) overall
-# and by arm, then reshaped to one row per characteristic.
 
-sleep_variables <- c(
-  "N1 duration, min" = "n1_of_sleep_period_min",
-  "N2 duration, min" = "n2_of_sleep_period_min",
-  "N3 duration, min" = "n3_of_sleep_period_min",
-  "REM duration, min" = "r_of_sleep_period_min",
-  "Total sleep time, min" = "tst_corrected_min",
-  "Sleep efficiency, %" = "sleep_eff_corrected_perc",
-  "Wake after sleep onset, min" = "wake_after_sleep_onset_of_sleep_period_min",
-  "Sleep onset latency, min" = "sleep_onset_delay_min"
+# Continuous variables are compared descriptively using Welch two-sample
+# t-tests. Binary and diagnosis variables are compared using Pearson
+# chi-square tests. P values are unadjusted and descriptive.
+
+etable1 <- bind_rows(
+  
+  section_group_row("Demographics"),
+  continuous_group_row(
+    "Age, mean (SD)",
+    "age"
+  ),
+  binary_group_row(
+    "Female, No. (%)",
+    "female"
+  ),
+  
+  section_group_row("Insomnia severity"),
+  continuous_group_row(
+    "ISI total, mean (SD)",
+    "ISI_T0"
+  ),
+  
+  section_group_row("RMT20 subscale, mean (SD)"),
+  continuous_group_row(
+    "Generalized anxiety disorder",
+    "RMT20_GAD_T0"
+  ),
+  continuous_group_row(
+    "Social anxiety disorder",
+    "RMT20_SAD_T0"
+  ),
+  continuous_group_row(
+    "Panic disorder",
+    "RMT20_panic_disorder_T0"
+  ),
+  continuous_group_row(
+    "Posttraumatic stress disorder",
+    "RMT20_PTSD_T0"
+  ),
+  
+  section_group_row("BPD-C severity, mean (SD)"),
+  continuous_group_row(
+    "Borderline personality disorder",
+    "BPD_C_T0"
+  ),
+  
+  section_group_row("MINI-confirmed clinical diagnoses, No. (%)"),
+  diagnosis_group_row(
+    "Generalized anxiety disorder",
+    "GAD_diagnosis"
+  ),
+  diagnosis_group_row(
+    "Social anxiety disorder",
+    "SAD_diagnosis"
+  ),
+  diagnosis_group_row(
+    "Panic disorder",
+    "PD_diagnosis"
+  ),
+  diagnosis_group_row(
+    "Posttraumatic stress disorder",
+    "PTSD_diagnosis"
+  ),
+  diagnosis_group_row(
+    "Any of the above diagnoses",
+    "any_clinical_diagnosis"
+  )
 )
 
-sleep_long <- d2 %>%
+
+names(etable1) <- c(
+  "Characteristic",
+  sprintf("CBT-I (n = %d)", n_cbti),
+  sprintf("Control (n = %d)", n_control),
+  "P Value"
+)
+
+
+print(etable1, n = Inf, width = Inf)
+
+
+# =============================================================================
+# 4. eTABLE 2 — BASELINE SLEEP CHARACTERISTICS
+# =============================================================================
+
+# For each participant, average each sleep variable across their eligible
+# Analysis 1 nights. Participant-level means are then summarized as mean (SD)
+# overall and by treatment condition.
+
+sleep_variables <- c(
+  "N1 duration, min" =
+    "n1_of_sleep_period_min",
+  "N2 duration, min" =
+    "n2_of_sleep_period_min",
+  "N3 duration, min" =
+    "n3_of_sleep_period_min",
+  "REM duration, min" =
+    "r_of_sleep_period_min",
+  "Total sleep time, min" =
+    "tst_corrected_min",
+  "Sleep efficiency, %" =
+    "sleep_eff_corrected_perc",
+  "Wake after sleep onset, min" =
+    "wake_after_sleep_onset_of_sleep_period_min",
+  "Sleep onset latency, min" =
+    "sleep_onset_delay_min"
+)
+
+
+sleep_long <- d_analysis1 %>%
   mutate(
     treatment = factor(
       condition,
@@ -157,7 +362,10 @@ sleep_long <- d2 %>%
   ) %>%
   group_by(subject, treatment) %>%
   summarise(
-    across(all_of(unname(sleep_variables)), mean_or_na),
+    across(
+      all_of(unname(sleep_variables)),
+      mean_or_na
+    ),
     .groups = "drop"
   ) %>%
   pivot_longer(
@@ -173,20 +381,61 @@ sleep_long <- d2 %>%
     )
   )
 
+
+stopifnot(
+  n_distinct(sleep_long$subject) == 223
+)
+
+
 sleep_overall <- sleep_long %>%
   group_by(Characteristic) %>%
-  summarise(value = format_mean_sd(value), .groups = "drop") %>%
+  summarise(
+    value = format_mean_sd(value),
+    .groups = "drop"
+  ) %>%
   mutate(group = "Total")
+
 
 sleep_by_group <- sleep_long %>%
   filter(!is.na(treatment)) %>%
-  group_by(Characteristic, treatment) %>%
-  summarise(value = format_mean_sd(value), .groups = "drop") %>%
+  group_by(
+    Characteristic,
+    treatment
+  ) %>%
+  summarise(
+    value = format_mean_sd(value),
+    .groups = "drop"
+  ) %>%
   rename(group = treatment)
 
-etable1 <- bind_rows(sleep_overall, sleep_by_group) %>%
-  mutate(group = factor(group, levels = c("Total", "CBT-I", "Control"))) %>%
-  pivot_wider(names_from = group, values_from = value) %>%
+
+etable2 <- bind_rows(
+  sleep_overall,
+  sleep_by_group
+) %>%
+  mutate(
+    group = factor(
+      group,
+      levels = c(
+        "Total",
+        "CBT-I",
+        "Control"
+      )
+    )
+  ) %>%
+  pivot_wider(
+    names_from = group,
+    values_from = value
+  ) %>%
   arrange(Characteristic)
 
-print(etable1, n = Inf, width = Inf)
+
+names(etable2) <- c(
+  "Sleep variable",
+  sprintf("Total (N = %d)", nrow(bl_all)),
+  sprintf("CBT-I (n = %d)", n_cbti),
+  sprintf("Control (n = %d)", n_control)
+)
+
+
+print(etable2, n = Inf, width = Inf)
