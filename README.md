@@ -1,4 +1,4 @@
-# Individual Differences in Sleep-Related Distress Alleviation Predict Change in Anxiety Severity
+Supporting analysis code for the manuscript "Individual Differences in Sleep-Related Distress Alleviation Predict Change in Anxiety Severity." 
 
 ## Scripts
 
