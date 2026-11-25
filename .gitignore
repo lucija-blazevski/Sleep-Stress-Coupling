@@ -1,0 +1,20 @@
+# Data are not shared in this repository
+data/
+
+# R session files
+.Rhistory
+.Rapp.history
+.RData
+.Rproj.user/
+
+# Compiled Stan model (created by cmdstanr next to marginal.stan)
+marginal
+marginal.exe
+
+# Windows / macOS
+Thumbs.db
+.DS_Store
+
+# Superseded scripts (not part of the analysis pipeline)
+old_01_analysis.R
+bayesian_hierarchical_model.R

@@ -8,8 +8,8 @@
 # Builds the descriptive tables reported in the manuscript:
 #
 #   Table 1     Participant characteristics, overall Analysis 1 sample
-#   eTable 1    Baseline characteristics by treatment condition
-#   eTable 2    Baseline sleep characteristics, overall and by treatment arm
+#   Table S1    Baseline characteristics by treatment condition
+#   Table S2    Baseline sleep characteristics, overall and by treatment arm
 #
 # R version   : 4.4.2
 # =============================================================================
@@ -19,8 +19,13 @@
 source("00_helpers.R")
 
 
-# Folder with the merged input CSV
-root <- "path/to/the/folder/with/csv"
+# Folder with the merged input CSV (same as 00_data.R): data/ next to the
+# scripts by default. Set the environment variable STRESS_SLEEP_DATA to use a
+# different location.
+root <- Sys.getenv(
+  "STRESS_SLEEP_DATA",
+  "data"
+)
 
 
 # =============================================================================
@@ -32,7 +37,7 @@ root <- "path/to/the/folder/with/csv"
 # evening distress, morning distress, and REM duration.
 
 d <- read_csv(
-  file.path(root, "name_of_the_df.csv"),
+  file.path(root, "data_all_studies_merged_30072026.csv"),
   show_col_types = FALSE
 ) %>%
   mutate(
@@ -149,7 +154,7 @@ n_control <- sum(bl_all$treatment == "Control", na.rm = TRUE)
 # =============================================================================
 
 # The main-manuscript table contains the overall Analysis 1 sample only.
-# Treatment-specific descriptives are reported in eTable 1.
+# Treatment-specific descriptives are reported in Table S1.
 
 table1 <- bind_rows(
   
@@ -240,7 +245,7 @@ print(table1, n = Inf, width = Inf)
 
 
 # =============================================================================
-# 3. eTABLE 1 — BASELINE CHARACTERISTICS BY TREATMENT CONDITION
+# 3. TABLE S1 — BASELINE CHARACTERISTICS BY TREATMENT CONDITION
 # =============================================================================
 
 # Continuous variables are compared descriptively using Welch two-sample
@@ -325,7 +330,7 @@ print(etable1, n = Inf, width = Inf)
 
 
 # =============================================================================
-# 4. eTABLE 2 — BASELINE SLEEP CHARACTERISTICS
+# 4. TABLE S2 — BASELINE SLEEP CHARACTERISTICS
 # =============================================================================
 
 # For each participant, average each sleep variable across their eligible

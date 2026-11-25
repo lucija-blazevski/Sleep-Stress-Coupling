@@ -27,8 +27,6 @@ required_packages <- c(
   "readr",
   "tidyr",
   "ggplot2",
-  "ggtext",
-  "ggeffects",
   "patchwork",
   "lme4",
   "lmerTest"
@@ -52,8 +50,6 @@ suppressPackageStartupMessages({
   library(readr)
   library(tidyr)
   library(ggplot2)
-  library(ggtext)
-  library(ggeffects)
   library(patchwork)
   library(lme4)
   library(lmerTest)
@@ -130,25 +126,6 @@ within_center <- function(x) {
 }
 
 
-#' Within-subject z-standardization.
-#'
-#' Centers and scales to a subject's own mean and SD. Returns all-NA when the
-#' subject has fewer than two valid observations or no within-subject variance,
-#' used only for the standardized, supplement models.
-#'
-#' @param x Numeric vector for one subject.
-#' @return Standardized vector, or all-NA if standardization is undefined.
-within_z <- function(x) {
-  valid <- !is.na(x)
-  
-  if (sum(valid) < 2 || isTRUE(sd(x[valid]) == 0)) {
-    return(rep(NA, length(x)))
-  }
-  
-  as.numeric(scale(x))
-}
-
-
 # =============================================================================
 # 3. DESCRIPTIVE-TABLE FORMATTING
 # =============================================================================
@@ -194,7 +171,7 @@ format_n_percent <- function(x, positive_value = 1) {
 #'
 #' Uses "<.001" below that threshold, three decimals below .01, otherwise two,
 #' with the leading zero stripped per style conventions. Returns a blank string
-#' when the P-value is unavailable, which is convenient for manuscript tables.
+#' when the P-value is unavailable.
 #'
 #' @param p Numeric P-value.
 #' @return A formatted character string, or "" if `p` is NA.
@@ -313,33 +290,6 @@ model_term <- function(model, term) {
     p = unname(coefficients[term, p_column]),
     lower_95 = unname(ci[1]),
     upper_95 = unname(ci[2])
-  )
-}
-
-
-#' Build a nice effect label for a model term.
-#'
-#' Produces an italicised "b = ...; P ..." string with HTML markup for use in
-#' `richtext_annotation()` for plotting.
-#'
-#' @param model A fitted model.
-#' @param term Name of the coefficient to label.
-#' @param digits Decimal places for the estimate (default 3).
-#' @return A character string containing HTML/markdown.
-format_effect_label <- function(model, term, digits = 3) {
-  result <- model_term(model, term)
-  
-  p_text <- if (result$p < .001) {
-    "&lt; .001"
-  } else {
-    paste0("= ", format_p(result$p))
-  }
-  
-  paste0(
-    "<i>b</i> = ",
-    sprintf(paste0("%.", digits, "f"), result$estimate),
-    "; <i>P</i> ",
-    p_text
   )
 }
 
@@ -563,163 +513,6 @@ diagnosis_group_row <- function(label, variable) {
 # 6. MODEL-FITTING WRAPPERS FOR THE RESULTS TABLES
 # =============================================================================
 
-#' Check whether a mixed-effects model converged successfully.
-#'
-#' @param model A fitted `merMod` object or an error returned by `tryCatch()`.
-#' @return Logical scalar indicating whether the model converged.
-model_converged <- function(model) {
-  
-  if (!inherits(model, "merMod")) {
-    return(FALSE)
-  }
-  
-  opt_code <- model@optinfo$conv$opt
-  conv_messages <- model@optinfo$conv$lme4$messages
-  
-  opt_ok <- is.null(opt_code) ||
-    length(opt_code) == 0L ||
-    all(opt_code == 0)
-  
-  messages_ok <- is.null(conv_messages)
-  
-  opt_ok && messages_ok
-}
-
-
-#' Fit one within-subject sleep-predictor model (Analysis 1 supplement).
-#'
-#' Fits morning distress as a function of a within-subject standardized sleep
-#' predictor and within-subject centered evening distress. The analytic sample
-#' is defined separately for each sleep predictor and requires at least two
-#' usable observations per participant.
-#'
-#' A model with an uncorrelated random intercept and random slope for the sleep
-#' predictor is attempted first. This model is retained only if it converges
-#' and is nonsingular. Otherwise, a random-intercept-only model is fitted.
-#'
-#' Expects `d_analysis1` in the calling environment and uses `within_z()` and
-#' `model_term()` defined above.
-#'
-#' @param label Human-readable label for the sleep variable.
-#' @param predictor Column name of the sleep predictor.
-#' @return A one-row tibble containing the sleep variable, participant and
-#'   night counts, random-effects structure, random-slope fit status,
-#'   coefficient, SE, 95% CI, and P-value.
-fit_sleep_predictor <- function(label, predictor) {
-  
-  # ---------------------------------------------------------------------------
-  # Define model-specific analytic sample
-  # ---------------------------------------------------------------------------
-  
-  dat <- d_analysis1 %>%
-    filter(
-      !is.na(.data[[predictor]]),
-      !is.na(stress_rating_m),
-      !is.na(E_c)
-    ) %>%
-    group_by(subject) %>%
-    filter(n() >= 2) %>%
-    mutate(
-      sleep_predictor_z = within_z(.data[[predictor]])
-    ) %>%
-    ungroup() %>%
-    filter(is.finite(sleep_predictor_z))
-  
-  
-  if (nrow(dat) == 0) {
-    stop(
-      "No usable observations remain for sleep predictor '",
-      predictor,
-      "'."
-    )
-  }
-  
-  
-  # ---------------------------------------------------------------------------
-  # Attempt random intercept + uncorrelated random slope
-  # ---------------------------------------------------------------------------
-  
-  random_slope_model <- tryCatch(
-    lmer(
-      stress_rating_m ~
-        sleep_predictor_z + E_c +
-        (1 + sleep_predictor_z || subject),
-      data = dat,
-      REML = TRUE
-    ),
-    error = function(e) e
-  )
-  
-  
-  random_slope_converged <- model_converged(random_slope_model)
-  
-  random_slope_singular <- if (random_slope_converged) {
-    isSingular(random_slope_model, tol = 1e-4)
-  } else {
-    NA
-  }
-  
-  
-  # ---------------------------------------------------------------------------
-  # Retain random slope only if converged AND nonsingular
-  # ---------------------------------------------------------------------------
-  
-  if (
-    random_slope_converged &&
-    !random_slope_singular
-  ) {
-    
-    model <- random_slope_model
-    random_effects <- "Random intercept + slope"
-    random_slope_status <- "Converged, nonsingular"
-    
-  } else {
-    
-    model <- lmer(
-      stress_rating_m ~
-        sleep_predictor_z + E_c +
-        (1 | subject),
-      data = dat,
-      REML = TRUE
-    )
-    
-    random_effects <- "Random intercept only"
-    
-    random_slope_status <- case_when(
-      !random_slope_converged ~
-        "Random-slope model did not converge",
-      isTRUE(random_slope_singular) ~
-        "Random-slope model singular",
-      TRUE ~
-        "Random-slope model not retained"
-    )
-  }
-  
-  
-  # ---------------------------------------------------------------------------
-  # Extract sleep-predictor effect
-  # ---------------------------------------------------------------------------
-  
-  result <- model_term(
-    model,
-    "sleep_predictor_z"
-  )
-  
-  
-  tibble(
-    `Sleep variable` = label,
-    participants = n_distinct(model.frame(model)$subject),
-    nights = nobs(model),
-    `Random-effects structure` = random_effects,
-    `Random-slope status` = random_slope_status,
-    b = result$estimate,
-    SE = result$SE,
-    lower_95 = result$lower_95,
-    upper_95 = result$upper_95,
-    p = result$p
-  )
-}
-
 #' Fit one outcome model with the coupling x condition interaction.
 #'
 #' Regresses a T1 outcome on standardized coupling, effect-coded condition,
@@ -778,41 +571,73 @@ fit_outcome_model <- function(outcome, variables) {
 }
 
 
-# =============================================================================
-# 7. SHARED GGPLOT2 THEME AND ANNOTATION
-# =============================================================================
-
-#' Boxed pretty annotation for effect labels on a plot.
+#' Participant-specific slopes from a primary-type mixed model.
 #'
-#' @param x,y Data coordinates for the label.
-#' @param label Rich-text (HTML/markdown) string, e.g. from
-#'   `format_effect_label()`.
-#' @param colour Text and border colour.
-#' @param hjust Horizontal justification (default 0.5).
-#' @return A ggplot2 annotation layer.
-richtext_annotation <- function(
-    x,
-    y,
-    label,
-    colour,
-    hjust = 0.5
-) {
-  annotate(
-    "richtext",
-    x = x,
-    y = y,
-    label = label,
-    fill = "white",
-    colour = colour,
-    label.size = 0.5,
-    label.r = grid::unit(0.15, "lines"),
-    label.padding = grid::unit(0.25, "lines"),
-    size = 5.5,
-    fontface = "bold",
-    hjust = hjust
+#' Extracts each participant's slope for `term` (fixed + random part),
+#' standardizes it and reverses its sign, so that higher values indicate
+#' stronger alleviation of next-morning distress on nights with more of the
+#' predictor.
+#'
+#' @param model A fitted `merMod` with a by-subject random slope for `term`.
+#' @param term Name of the night-level predictor.
+#' @param name Name of the returned slope column.
+#' @return A tibble with `subject` and the standardized, reverse-coded slope.
+person_slopes <- function(model, term, name = "rem_slope_sd") {
+  coef(model)$subject %>%
+    as.data.frame() %>%
+    rownames_to_column("subject") %>%
+    transmute(
+      subject = as.character(subject),
+      !!name := as.numeric(-scale(.data[[term]]))
+    )
+}
+
+
+#' Fit the primary night-level model for a given within-person predictor.
+#'
+#' Morning distress ~ predictor + evening distress, with a random intercept
+#' and an uncorrelated random slope for the predictor per participant.
+#'
+#' @param term Name of the within-person centered predictor.
+#' @param data Night-level data (default: `d_analysis1`).
+#' @param bobyqa Use the bobyqa optimizer (avoids false-positive convergence
+#'   warnings in the sensitivity models; estimates are unchanged).
+fit_primary_type <- function(term, data = d_analysis1, bobyqa = TRUE) {
+  lmer(
+    as.formula(sprintf(
+      "stress_rating_m ~ %s + E_c + (1 + %s || subject)", term, term
+    )),
+    data = data,
+    REML = TRUE,
+    control = if (bobyqa) {
+      lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+    } else {
+      lmerControl()
+    }
   )
 }
 
+
+#' Analysis 2 model for a given standardized slope.
+#'
+#' GAD severity at follow-up ~ slope x treatment condition + baseline GAD.
+#'
+#' @param slope Name of the slope column in `data`.
+#' @param data Subject-level data containing the slope.
+#' @param interaction Include the slope x condition interaction (default TRUE).
+fit_gad_model <- function(slope, data, interaction = TRUE) {
+  rhs <- if (interaction) {
+    sprintf("%s * condition_ec + RMT20_GAD_T0", slope)
+  } else {
+    sprintf("%s + condition_ec + RMT20_GAD_T0", slope)
+  }
+  lm(as.formula(paste("RMT20_GAD_T1 ~", rhs)), data = data)
+}
+
+
+# =============================================================================
+# 7. SHARED GGPLOT2 THEME AND ANNOTATION
+# =============================================================================
 
 #' Shared minimal theme for the manuscript figures.
 #'
